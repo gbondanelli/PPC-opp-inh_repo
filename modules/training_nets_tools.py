@@ -4,16 +4,16 @@ import time
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from numpy import random
 from matplotlib.pyplot import *
 sys.path.insert(0, './modules/')
 from modules import data_analysis_tools as dat
 from scipy.stats import pearsonr
+import time
 
 
 # Define network class
 class RNN(nn.Module):
-    def __init__(self, dim_rec, noise_std, dt, tau, g, signature, nonlinearity, psparse=1., wrec=None, use_W=False):
+    def __init__(self, dim_rec, noise_std, dt, tau, g, signature, nonlinearity, Mask_connections = 1., wrec=None, use_W=False):
         """
         RNN model for training.
         dim_rec:        number of neurons
@@ -33,10 +33,9 @@ class RNN(nn.Module):
         self.signature = signature
         mask_EI = np.tile(signature, (self.dim_rec, 1))
         np.fill_diagonal(mask_EI, 0) # --- no self-coupling ---
-        mask_sparse = random.choice([1, 0], size=(self.dim_rec,self.dim_rec), p=[psparse, 1-psparse])
-        self.mask = torch.tensor(mask_EI*mask_sparse, dtype=torch.float32)
+        self.mask = torch.tensor(mask_EI * Mask_connections, dtype=torch.float32)
         self.nonlinearity = nonlinearity
-        self.psparse = psparse
+        self.Mask_connections = Mask_connections
         self.use_W = use_W
 
         # Define and initilize parameters
@@ -89,8 +88,7 @@ class RNN(nn.Module):
 
         for i in range(seq_len):
             rec_input = (self.nonlinearity(h).matmul(W_eff.t()) + input[:, i, :])
-            # func = nn.LeakyReLU()
-            # rec_input = (torch.matmul(func(h),W.t()) + input[:, i, :])
+
             h = ((1 - dt_tau) * h
                  + dt_tau * rec_input
                  + np.sqrt(dt_tau) * self.noise_std * noise[:, i, :])
@@ -111,10 +109,10 @@ class TrainNetOnTraces(RNN):
         self.device     = device
         self.target_t   = target_t
 
-    def set_net_params(self, dim_rec, noise_std, dt, tau, g, signature, nonlinearity, psparse=1., constraint=None, wrec=None):
+    def set_net_params(self, dim_rec, noise_std, dt, tau, g, signature, nonlinearity, Mask_connections=1., constraint=None, wrec=None):
         # Initialize network
-        super(TrainNetOnTraces,self).__init__(dim_rec, noise_std, dt, tau, g, signature, nonlinearity, psparse, wrec)
-        net = RNN(dim_rec, noise_std, dt, tau, g, signature, nonlinearity, psparse, wrec)
+        super(TrainNetOnTraces,self).__init__(dim_rec, noise_std, dt, tau, g, signature, nonlinearity, Mask_connections, wrec)
+        net = RNN(dim_rec, noise_std, dt, tau, g, signature, nonlinearity, Mask_connections, wrec)
         net.to(device=self.device)
         self.net = net
         self.wrec_init = self.net.wrec.detach().cpu().numpy().copy()
@@ -142,11 +140,12 @@ class TrainNetOnTraces(RNN):
         n_traces            = self.target_R_all.shape[0]
 
         time0 = time.time()
-        random_trace_for_training_epoch = random.permutation(list(range(n_traces))*n_epochs)
+        random_trace_for_training_epoch = np.random.permutation(list(range(n_traces))*n_epochs)
         self.losses = np.zeros(n_epochs*n_traces)
         self.converging = True
 
         for i_epoch in (tqdm(range(n_epochs*n_traces),colour='#de1da4') if verbose else range(n_epochs*n_traces)):
+
             which_trace = random_trace_for_training_epoch[i_epoch]
             target_R    = self.target_R_all[which_trace]
             input       = self.input_all[which_trace]
@@ -187,8 +186,6 @@ class TrainNetOnTraces(RNN):
 
             loss    = loss_criterion(output, target_batch)
 
-
-
             if self.constraint is not None:
                 if self.constraint['type'] == 'PearsonCorr':
                     cee, cie, cei, cii = self.constraint['values']
@@ -219,9 +216,8 @@ class TrainNetOnTraces(RNN):
             output.detach_()
 
             self.losses[i_epoch] = loss.item()
-            print(loss.item())
 
-            # early stopping:
+            #early stopping:
             if i_epoch > 200:
                 last_losses = self.losses[i_epoch - 100: i_epoch]
                 if (np.mean(last_losses) > 50) or (np.var(np.diff(last_losses)) < 1e-10):
@@ -229,7 +225,6 @@ class TrainNetOnTraces(RNN):
                         self.converging = False
                     print('Early stopped! Mean=', np.mean(last_losses), np.var(np.diff(last_losses)), self.converging)
                     break
-
 
         for i_trace in range(n_traces):
             rec_step = rec_step
@@ -252,29 +247,36 @@ class TrainNetOnTraces(RNN):
         wrec_EI = abs(wrec_final) * self.net.mask.numpy()
         self.W_trained = wrec_EI
         self.R_trained = R
-        self.state_net = dict(W_init    = self.wrec_init  if self.converging else np.nan,
-                              W_EI      = wrec_EI         if self.converging else np.nan,
-                              W         = self.W_trained  if self.converging else np.nan,
-                              R         = self.R_trained  if self.converging else np.nan,
-                              n_epochs  = n_epochs        if self.converging else np.nan,
-                              lr        = learning_rate   if self.converging else np.nan,
-                              losses    = self.losses     if self.converging else np.nan,
-                              rec_step  = step            if self.converging else np.nan,
-                              signature = self.signature  if self.converging else np.nan,
-                              psparse   = self.psparse    if self.converging else np.nan)
+        self.state_net = dict(W_init    = self.wrec_init if self.converging else np.nan,
+                              W_EI      = wrec_EI        if self.converging else np.nan,
+                              W         = self.W_trained if self.converging else np.nan,
+                              R         = self.R_trained if self.converging else np.nan,
+                              n_epochs  = n_epochs       if self.converging else np.nan,
+                              lr        = learning_rate  if self.converging else np.nan,
+                              losses    = self.losses    if self.converging else np.nan,
+                              rec_step  = rec_step       if self.converging else np.nan,
+                              signature = self.signature if self.converging else np.nan,
+                              psparse   = 1.             if self.converging else np.nan,
+                              input     = self.input_all if self.converging else np.nan,
+                              Mask_connections   = self.Mask_connections   if self.converging else np.nan)
 
-def generate_low_pass_noise(shape, dt, tau=1., amplitude=1.):
+def generate_low_pass_noise(shape, dt, tau=1., amplitude=1):
+    np.random.seed( int(time.time()%1*1e6) )
     ampWN = np.sqrt(tau/dt)
     iWN = ampWN * np.random.randn(shape[0], shape[1])
+
     input = np.ones(shape)
+
+    # input = np.zeros(shape)
+    # input[0] = np.random.normal(0.,0.25,shape[1])
+
     n_t = shape[0]
     for tt in range(1, n_t):
         input[tt] = iWN[tt] + (input[tt - 1] - iWN[tt]) * np.exp(- (dt/tau))
     input *= amplitude
     return input
 
-def compute_fittedactivity_from_dataset(filename, which_trial, W, nonlinearity, N, noise_std, tau, rec_step, psparse=1.):
-
+def compute_fittedactivity_from_dataset(filename, which_trial, W, nonlinearity, N, noise_std, tau, rec_step, Mask_connections=1.):
     df = pd.read_pickle(filename)
     data_training   = df.data_training
     input           = df.input
@@ -288,7 +290,7 @@ def compute_fittedactivity_from_dataset(filename, which_trial, W, nonlinearity, 
     # nonlinearity = lambda x: 1 / (1 + torch.exp(-(x - theta)))
     f = lambda x: nonlinearity(x,theta)
 
-    net         = RNN(N, noise_std, dt, tau, g, signature, f, psparse, W, use_W=True)
+    net         = RNN(N, noise_std, dt, tau, g, signature, f, Mask_connections, W, use_W=True)
     h_init      = np.zeros(N)[None]
     input_this  = input[which_trial][None]
     h_init      = torch.from_numpy(np.float32(h_init))
@@ -298,19 +300,16 @@ def compute_fittedactivity_from_dataset(filename, which_trial, W, nonlinearity, 
     rates = rates.detach().numpy()[0].T
     return rates
 
+def compute_fittedactivity_from_dataset_v2(data_training, input, which_trial, W, nonlinearity, N, noise_std, tau, rec_step, signature, \
+                                           g, theta, dt, Mask_connections=1.):
 
-def compute_fittedactivity_from_dataset_v2(df, which_trial, W, nonlinearity, N, noise_std, tau, rec_step, signature, \
-                                           g, theta, dt, psparse=1.):
-
-    data_training   = df.data_training
-    input           = df.input
     N       = len(signature)
     n_nets  = len(data_training)
 
     # nonlinearity = lambda x: 1 / (1 + torch.exp(-(x - theta)))
     f = lambda x: nonlinearity(x,theta)
 
-    net         = RNN(N, noise_std, dt, tau, g, signature, f, psparse, W, use_W=True)
+    net         = RNN(N, noise_std, dt, tau, g, signature, f, Mask_connections, W, use_W=True)
     h_init      = np.zeros(N)[None]
     input_this  = input[which_trial][None]
     h_init      = torch.from_numpy(np.float32(h_init))
@@ -320,5 +319,32 @@ def compute_fittedactivity_from_dataset_v2(df, which_trial, W, nonlinearity, N, 
     rates = rates.detach().numpy()[0].T
     return rates
 
-##
+def set_input(n_t, N, dt, signature, idx_c, on_which):
+    input_1 = generate_low_pass_noise((n_t, N), dt)[None]
+    input_2 = generate_low_pass_noise((n_t, N), dt)[None]
+    input = np.concatenate((input_1,input_2), axis=0)
 
+    dict_idx = dat.indices_neurons_EIchoice(signature, idx_c)
+    I  = dict_idx['idx_i']
+    I1  = dict_idx['idx_i1']
+    I2  = dict_idx['idx_i2']
+    E1 = dict_idx['idx_e1']
+    E2 = dict_idx['idx_e2']
+
+    if on_which == 'E':
+        input[0][:,I] = np.zeros((n_t,len(I)))
+        input[1][:,I] = np.zeros((n_t,len(I)))
+        input[0][:,E2] = 0.25*input[0][:,E2]
+        input[1][:,E1] = 0.25*input[1][:,E1]
+
+    elif on_which == 'EI':
+        input[0][:,I1] = 1.*input[0][:,I1]
+        input[1][:,I1] = 1.*input[1][:,I1]
+        input[0][:,I2] = 1.*input[0][:,I2]
+        input[1][:,I2] = 1.*input[1][:,I2]
+
+        input[0][:,I2] = 0.25*input[0][:,I2]
+        input[1][:,I1] = 0.25*input[1][:,I1]
+        input[0][:,E2] = 0.25*input[0][:,E2]
+        input[1][:,E1] = 0.25*input[1][:,E1]
+    return input

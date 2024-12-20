@@ -19,6 +19,8 @@ from TrainingParams import *
 device = torch.device('cpu')
 n_jobs = joblib.cpu_count()
 
+##
+
 theta = 1
 beta = 0.5
 which_nl = sys.argv[1]
@@ -30,8 +32,9 @@ nonlinearity = lambda x: dict_nl[which_nl](x,theta)
 dict_g = {'g01':0.1, 'g02':0.2, 'g05':0.5, 'g08':0.8}
 g = dict_g[sys.argv[2]]
 
-f = './data/trial_avg_activity_n131.pkl'
-# f = './data/trial_avg_activity.pkl'
+f = './data/PPC_data.pkl'
+
+##
 
 df = pd.read_pickle(f)
 df = df.sort_values(by=['type'],ascending=False)
@@ -39,14 +42,11 @@ df = df.reset_index(drop=True)
 signature = df.type.map({'pyramidal':1, 'unknown':1, 'non pyramidal':-1}).to_list()
 df = dat.normalize_data_by_peak_of_preferred_trial(df, columns = ['Ca_trial_mean_bR','Ca_trial_mean_wL'])
 
+##
+
 activity_right = np.stack(df.Ca_trial_mean_bR.values)[None]
 activity_left = np.stack(df.Ca_trial_mean_wL.values)[None]
 activity = np.concatenate((activity_left, activity_right), axis=0)
-
-# idx_L = df[df.selectivity_MI=='Left'].index
-# idx_R = df[df.selectivity_MI=='Right'].index
-# idx_NS = df[(df.selectivity_MI=='Non') | (df.selectivity_MI=='Mixed')].index
-# idx_c = [idx_L, idx_R, idx_NS]
 
 idx_L = df[df.select_idx_MI < 0].index
 idx_R = df[df.select_idx_MI > 0].index
@@ -80,6 +80,7 @@ for i_par in range(len(psparse)):
     print(f'p={psparse[i_par]}', flush=True)
 
     def train_network_many_times():
+
         #---------------------
         input = set_input(n_t, N, dt, signature, idx_c, on_which='EI')
         #---------------------
@@ -104,13 +105,11 @@ for i_par in range(len(psparse)):
 
 print(f'Time elapsed = {time.time()-time0}')
 
-# filename = './results/data_training_' + which_nl + '_thfixed1_vs_psparse_'+ sys.argv[2] +'.pkl'
-
-# filename = './results/data_training_' + which_nl + '_thfixed1_vs_psparse_'+ sys.argv[2] +'_192nets_beta05_inputEI.pkl'
-
-filename = './results/data_training_131_inputEI_1_pt3.pkl'
-
+filename = './results/data_training.pkl'
 data_vs_par.to_pickle(filename)
 
 
+
+
+##
 
